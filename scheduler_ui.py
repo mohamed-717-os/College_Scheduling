@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox, simpledialog, filedialog
 import json
 import os
 
@@ -369,6 +369,10 @@ class SchedulingApp:
         clear_btn.grid(row=0, column=1, padx=10)
         Tooltip(clear_btn, "Reset all inputs to default values")
 
+        load_btn = ttk.Button(action_frame, text="Browse Inputs", command=self.browse_inputs, style="Custom.TButton")
+        load_btn.grid(row=0, column=2, padx=10)
+        Tooltip(load_btn, "Browse and load inputs from a JSON file")
+
         self.env_listbox.bind('<<ListboxSelect>>', self.update_groups)
 
     def clear_inputs(self):
@@ -399,6 +403,108 @@ class SchedulingApp:
         self.subject_listbox.delete(0, tk.END)
         self.assistant_listbox.delete(0, tk.END)
         self.doctor_listbox.delete(0, tk.END)
+
+    def browse_inputs(self):
+        """Open a file dialog to select a JSON file and load its contents."""
+        try:
+            file_path = filedialog.askopenfilename(
+                title="Select JSON File",
+                filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
+            )
+            if not file_path:
+                return  # User canceled the dialog
+
+            with open(file_path, "r") as f:
+                data = json.load(f)
+
+            # Populate basic parameters
+            self.halls.set(str(data.get("halls", 4)))
+            self.labs.set(str(data.get("labs", 9)))
+            self.days.set(str(data.get("days", 5)))
+            self.periods.set(str(data.get("periods", 5)))
+            self.assistant_max_periods.set(str(data.get("AL", [8, 3])[0]))
+            self.assistant_max_subjects.set(str(data.get("AL", [8, 3])[1]))
+            self.doctor_max_periods.set(str(data.get("TA", [5, 3])[0]))
+            self.doctor_max_subjects.set(str(data.get("TA", [5, 3])[1]))
+
+            # Load environments, groups, and subjects
+            self.environments = data.get("environments", [])
+            self.groups = data.get("groups", {})
+            self.subjects = data.get("subjects", {})
+
+            # Reconstruct classes to match the {env: {group: [classes]}} format
+            flat_classes = data.get("classes", {})
+            self.classes = {env: {} for env in self.environments}
+            for env in self.environments:
+                for group in self.groups.get(env, []):
+                    # Assign classes for the group, default to empty list if not found
+                    self.classes[env][group] = flat_classes.get(group, [])
+
+            # Initialize assistants and doctors dictionaries
+            self.assistants = {env: [] for env in self.environments}
+            self.doctors = {env: [] for env in self.environments}
+
+            # Populate assistants and doctors, mapping them to environments
+            loaded_assistants = data.get("A", [])
+            loaded_doctors = data.get("T", [])
+            # For simplicity, distribute assistants and doctors based on subject preferences
+            for env in self.environments:
+                env_subjects = set(self.subjects.get(env, []))
+                for assistant in loaded_assistants:
+                    # Check if assistant has preferences for any subjects in this environment
+                    assistant_prefs = data.get("AS", {}).get(assistant, {})
+                    if any(subject in env_subjects and assistant_prefs.get(subject, 0) == 1 for subject in assistant_prefs):
+                        self.assistants[env].append(assistant)
+                for doctor in loaded_doctors:
+                    # Check if doctor has preferences for any subjects in this environment
+                    doctor_prefs = data.get("TS", {}).get(doctor, {})
+                    if any(subject in env_subjects and doctor_prefs.get(subject, 0) == 1 for subject in doctor_prefs):
+                        self.doctors[env].append(doctor)
+
+            # Load and convert time preferences (AT and TT)
+            self.assistant_time_prefs = {}
+            self.doctor_time_prefs = {}
+            for assistant in loaded_assistants:
+                at_prefs = data.get("AT", {}).get(assistant, {})
+                self.assistant_time_prefs[assistant] = {
+                    (day, period): at_prefs.get(str(day), {}).get(str(period), 0)
+                    for day in range(1, int(self.days.get()) + 1)
+                    for period in range(1, int(self.periods.get()) + 1)
+                }
+            for doctor in loaded_doctors:
+                tt_prefs = data.get("TT", {}).get(doctor, {})
+                self.doctor_time_prefs[doctor] = {
+                    (day, period): tt_prefs.get(str(day), {}).get(str(period), 0)
+                    for day in range(1, int(self.days.get()) + 1)
+                    for period in range(1, int(self.periods.get()) + 1)
+                }
+
+            # Load subject preferences (AS and TS)
+            self.assistant_subject_prefs = data.get("AS", {})
+            self.doctor_subject_prefs = data.get("TS", {})
+
+            # Populate the environment listbox
+            self.env_listbox.delete(0, tk.END)
+            for env in self.environments:
+                self.env_listbox.insert(tk.END, env)
+            if not self.environments:
+                self.env_listbox.insert(tk.END, "Add an environment to start...")
+
+            # Clear other listboxes
+            self.group_listbox.delete(0, tk.END)
+            self.class_listbox.delete(0, tk.END)
+            self.subject_listbox.delete(0, tk.END)
+            self.assistant_listbox.delete(0, tk.END)
+            self.doctor_listbox.delete(0, tk.END)
+
+            # Update UI if an environment is selected
+            if self.environments and self.env_listbox.size() > 0:
+                self.env_listbox.select_set(0)  # Select the first environment
+                self.update_groups(None)  # Trigger UI update
+
+            messagebox.showinfo("Success", "Inputs loaded successfully.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Error loading inputs: {str(e)}")
 
     def add_environment(self):
         """Add a new environment to the list and initialize its data structures."""
@@ -717,6 +823,8 @@ class SchedulingApp:
         if selected:
             env = self.env_listbox.get(self.env_listbox.curselection()[0])
             group = self.group_listbox.get(selected[0])
+            if env not in self.classes or group not in self.classes[env]:
+                return
             for class_name in self.classes[env].get(group, []):
                 self.class_listbox.insert(tk.END, class_name)
 
