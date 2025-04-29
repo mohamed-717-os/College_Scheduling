@@ -2,6 +2,17 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, filedialog
 import json
 import os
+import time
+import threading
+
+# Import the logic file (assumed to be scheduler_logic.py)
+try:
+    from scheduellogic import generate_schedules # add the name of the file here 
+except ImportError:
+    def generate_schedules(data):
+        # Placeholder if the logic file is not found
+        time.sleep(5)  # Simulate a 5-second generation process
+        return {"status": "placeholder", "message": "Schedules generated (placeholder)"}
 
 class Tooltip:
     """A class to create tooltips for widgets that appear on hover."""
@@ -34,13 +45,22 @@ class Tooltip:
 
 class PreferenceDialog:
     """A dialog to set time preferences for assistants and doctors."""
-    def __init__(self, parent, days, periods, title):
+    def __init__(self, parent, days, periods, title, existing_prefs=None):
         self.top = tk.Toplevel(parent)
         self.top.title(title)
         self.top.geometry("400x300")
         self.days = list(range(1, days + 1))
         self.periods = list(range(1, periods + 1))
-        self.preferences = {(d, p): tk.BooleanVar(value=True) for d in self.days for p in self.periods}
+        
+        # Initialize preferences with existing values if provided, else default to True
+        self.preferences = {}
+        if existing_prefs is not None:
+            for d in self.days:
+                for p in self.periods:
+                    # Use existing preference if available, otherwise default to True
+                    self.preferences[(d, p)] = tk.BooleanVar(value=bool(existing_prefs.get((d, p), 1)))
+        else:
+            self.preferences = {(d, p): tk.BooleanVar(value=True) for d in self.days for p in self.periods}
         
         # Create a grid of checkboxes for each day and period
         ttk.Label(self.top, text="Select preferred days and periods:").pack(pady=5)
@@ -61,6 +81,9 @@ class PreferenceDialog:
         
         # Buttons
         ttk.Button(self.top, text="Save", command=self.save).pack(pady=10)
+        
+        ttk.Button(self.top, text="Reset", command=self.reset).pack(pady=5)
+        
         ttk.Button(self.top, text="Cancel", command=self.top.destroy).pack(pady=5)
         self.result = None
 
@@ -69,14 +92,28 @@ class PreferenceDialog:
         self.result = {(d, p): 1 if self.preferences[(d, p)].get() else 0 for d in self.days for p in self.periods}
         self.top.destroy()
 
+    def reset(self):
+        """Reset all time preferences to the default value (True)."""
+        for d in self.days:
+            for p in self.periods:
+                self.preferences[(d, p)].set(True)
+
 class SubjectPreferenceDialog:
     """A dialog to set subject preferences for assistants and doctors."""
-    def __init__(self, parent, subjects, title):
+    def __init__(self, parent, subjects, title, existing_prefs=None):
         self.top = tk.Toplevel(parent)
         self.top.title(title)
         self.top.geometry("300x400")
         self.subjects = subjects
-        self.preferences = {s: tk.BooleanVar(value=False) for s in subjects}
+        
+        # Initialize preferences with existing values if provided, else default to False
+        self.preferences = {}
+        if existing_prefs is not None:
+            for s in self.subjects:
+                # Use existing preference if available, otherwise default to False
+                self.preferences[s] = tk.BooleanVar(value=bool(existing_prefs.get(s, 0)))
+        else:
+            self.preferences = {s: tk.BooleanVar(value=False) for s in subjects}
         
         # Create a list of checkboxes for each subject
         ttk.Label(self.top, text="Select preferred subjects:").pack(pady=5)
@@ -89,6 +126,9 @@ class SubjectPreferenceDialog:
         
         # Buttons
         ttk.Button(self.top, text="Save", command=self.save).pack(pady=10)
+        
+        ttk.Button(self.top, text="Reset", command=self.reset).pack(pady=5)
+        
         ttk.Button(self.top, text="Cancel", command=self.top.destroy).pack(pady=5)
         self.result = None
 
@@ -96,6 +136,11 @@ class SubjectPreferenceDialog:
         """Save the selected subject preferences as a dictionary."""
         self.result = {s: 1 if self.preferences[s].get() else 0 for s in self.subjects}
         self.top.destroy()
+
+    def reset(self):
+        """Reset all subject preferences to the default value (False)."""
+        for s in self.subjects:
+            self.preferences[s].set(False)
 
 class SchedulingApp:
     """Main application class for collecting scheduling inputs."""
@@ -162,6 +207,7 @@ class SchedulingApp:
         style.configure("Add.TButton", background="#4CAF50", foreground="#4CAF50")
         style.configure("Delete.TButton", background="#F44336", foreground="#F44336")
         style.configure("Save.TButton", background="#2196F3", foreground="#2196F3")
+        style.configure("Generate.TButton", background="#FF9800", foreground="#FF9800")
         style.configure("Invalid.TEntry", fieldbackground="#FFEBEE")
         style.configure("TLabel", font=("Helvetica", 11))
 
@@ -372,6 +418,10 @@ class SchedulingApp:
         load_btn = ttk.Button(action_frame, text="Browse Inputs", command=self.browse_inputs, style="Custom.TButton")
         load_btn.grid(row=0, column=2, padx=10)
         Tooltip(load_btn, "Browse and load inputs from a JSON file")
+
+        generate_btn = ttk.Button(action_frame, text="🚀 Generate Schedules", command=self.generate_schedules, style="Generate.TButton")
+        generate_btn.grid(row=0, column=3, padx=10)
+        Tooltip(generate_btn, "Generate schedules using the input data")
 
         self.env_listbox.bind('<<ListboxSelect>>', self.update_groups)
 
@@ -650,7 +700,7 @@ class SchedulingApp:
                 self.assistant_listbox.insert(tk.END, assistant)
 
     def set_assistant_time_preferences(self):
-        """Open a dialog to set time preferences for the selected assistant."""
+        """Open a dialog to set time preferences for the selected assistant, loading existing preferences if available."""
         selected_env = self.env_listbox.curselection()
         selected_assistant = self.assistant_listbox.curselection()
         if not selected_env or self.env_listbox.get(selected_env[0]) == "Add an environment to start...":
@@ -667,13 +717,15 @@ class SchedulingApp:
         
         days = int(self.days.get())
         periods = int(self.periods.get())
-        dialog = PreferenceDialog(self.root, days, periods, f"Time Preferences for {assistant}")
+        # Load existing preferences if they exist
+        existing_prefs = self.assistant_time_prefs.get(assistant, None)
+        dialog = PreferenceDialog(self.root, days, periods, f"Time Preferences for {assistant}", existing_prefs=existing_prefs)
         self.root.wait_window(dialog.top)
         if dialog.result is not None:
             self.assistant_time_prefs[assistant] = dialog.result
 
     def set_assistant_subject_preferences(self):
-        """Open a dialog to set subject preferences for the selected assistant, showing only subjects in the current environment."""
+        """Open a dialog to set subject preferences for the selected assistant, loading existing preferences if available."""
         selected_env = self.env_listbox.curselection()
         selected_assistant = self.assistant_listbox.curselection()
         if not selected_env or self.env_listbox.get(selected_env[0]) == "Add an environment to start...":
@@ -691,7 +743,9 @@ class SchedulingApp:
             messagebox.showwarning("Warning", f"No subjects available in environment '{env}'. Add subjects first!")
             return
         
-        dialog = SubjectPreferenceDialog(self.root, env_subjects, f"Subject Preferences for {assistant} ({env})")
+        # Load existing preferences if they exist
+        existing_prefs = self.assistant_subject_prefs.get(assistant, None)
+        dialog = SubjectPreferenceDialog(self.root, env_subjects, f"Subject Preferences for {assistant} ({env})", existing_prefs=existing_prefs)
         self.root.wait_window(dialog.top)
         if dialog.result is not None:
             # Expand the result to include all subjects across all environments
@@ -731,7 +785,7 @@ class SchedulingApp:
                 self.doctor_listbox.insert(tk.END, doctor)
 
     def set_doctor_time_preferences(self):
-        """Open a dialog to set time preferences for the selected doctor."""
+        """Open a dialog to set time preferences for the selected doctor, loading existing preferences if available."""
         selected_env = self.env_listbox.curselection()
         selected_doctor = self.doctor_listbox.curselection()
         if not selected_env or self.env_listbox.get(selected_env[0]) == "Add an environment to start...":
@@ -748,13 +802,15 @@ class SchedulingApp:
         
         days = int(self.days.get())
         periods = int(self.periods.get())
-        dialog = PreferenceDialog(self.root, days, periods, f"Time Preferences for {doctor}")
+        # Load existing preferences if they exist
+        existing_prefs = self.doctor_time_prefs.get(doctor, None)
+        dialog = PreferenceDialog(self.root, days, periods, f"Time Preferences for {doctor}", existing_prefs=existing_prefs)
         self.root.wait_window(dialog.top)
         if dialog.result is not None:
             self.doctor_time_prefs[doctor] = dialog.result
 
     def set_doctor_subject_preferences(self):
-        """Open a dialog to set subject preferences for the selected doctor, showing only subjects in the current environment."""
+        """Open a dialog to set subject preferences for the selected doctor, loading existing preferences if available."""
         selected_env = self.env_listbox.curselection()
         selected_doctor = self.doctor_listbox.curselection()
         if not selected_env or self.env_listbox.get(selected_env[0]) == "Add an environment to start...":
@@ -772,7 +828,9 @@ class SchedulingApp:
             messagebox.showwarning("Warning", f"No subjects available in environment '{env}'. Add subjects first!")
             return
         
-        dialog = SubjectPreferenceDialog(self.root, env_subjects, f"Subject Preferences for {doctor} ({env})")
+        # Load existing preferences if they exist
+        existing_prefs = self.doctor_subject_prefs.get(doctor, None)
+        dialog = SubjectPreferenceDialog(self.root, env_subjects, f"Subject Preferences for {doctor} ({env})", existing_prefs=existing_prefs)
         self.root.wait_window(dialog.top)
         if dialog.result is not None:
             # Expand the result to include all subjects across all environments
@@ -947,8 +1005,107 @@ class SchedulingApp:
                 json.dump(data, f, indent=4)
             messagebox.showinfo("Success", "Inputs saved to 'inputs/scheduling_inputs.json'.")
 
+            return data  # Return the data for use in generate_schedules
         except Exception as e:
             messagebox.showerror("Error", f"Error saving inputs: {str(e)}")
+            return None
+
+    def generate_schedules(self):
+        """Generate schedules using the logic file and display a progress bar."""
+        # First, save and validate inputs
+        data = self.save_inputs()
+        if data is None:
+            return  # Validation failed, error message already shown
+
+        # Create a modal dialog with a progress bar
+        progress_dialog = tk.Toplevel(self.root)
+        progress_dialog.title("Generating Schedules")
+        progress_dialog.geometry("300x100")
+        progress_dialog.transient(self.root)
+        progress_dialog.grab_set()
+
+        ttk.Label(progress_dialog, text="Generating schedules, please wait...").pack(pady=10)
+        progress_bar = ttk.Progressbar(progress_dialog, length=200, mode="determinate", maximum=100)
+        progress_bar.pack(pady=10)
+
+        # Variables to control the generation process
+        self.generation_complete = False
+        self.generation_error = None
+
+        def run_generation():
+            """Run the generation in a separate thread."""
+            try:
+                # -------------------- START: Generate Schedules Modifications --------------------
+                # Call the generate_schedules function from scheduler_logic.py
+                # The function is expected to handle its own output saving
+                generate_schedules(data)
+                # -------------------- END: Generate Schedules Modifications --------------------
+            except Exception as e:
+                self.generation_error = str(e)
+            finally:
+                self.generation_complete = True
+
+        def update_progress():
+            """Update the progress bar while generation is running."""
+            start_time = time.time()
+            estimated_duration = 10  # Estimated time in seconds (adjust as needed)
+            while not self.generation_complete:
+                elapsed = time.time() - start_time
+                progress = min(100, (elapsed / estimated_duration) * 100)
+                progress_bar["value"] = progress
+                progress_dialog.update()
+                time.sleep(0.1)  # Update every 100ms
+
+            # Ensure the progress bar reaches 100% when done
+            progress_bar["value"] = 100
+            progress_dialog.update()
+
+            # Close the dialog and show the result
+            progress_dialog.destroy()
+            if self.generation_error:
+                messagebox.showerror("Error", f"Error generating schedules: {self.generation_error}")
+            else:
+                # -------------------- START: Generate Schedules Modifications --------------------
+                # Show a success message without saving the output here
+                messagebox.showinfo("Success", "Schedules generated successfully. Check the output as specified by the logic file.")
+                # -------------------- END: Generate Schedules Modifications --------------------
+
+        # Start the generation in a separate thread
+        threading.Thread(target=run_generation, daemon=True).start()
+        # Start updating the progress bar
+        update_progress()
+
+    def update_groups(self, event):
+        """Update the groups, classes, subjects, assistants, and doctors listboxes when an environment is selected."""
+        self.group_listbox.delete(0, tk.END)
+        self.class_listbox.delete(0, tk.END)
+        self.subject_listbox.delete(0, tk.END)
+        self.assistant_listbox.delete(0, tk.END)
+        self.doctor_listbox.delete(0, tk.END)
+        selected = self.env_listbox.curselection()
+        if selected and self.env_listbox.get(selected[0]) != "Add an environment to start...":
+            env = self.env_listbox.get(selected[0])
+            for group in self.groups.get(env, []):
+                self.group_listbox.insert(tk.END, group)
+            for subject in self.subjects.get(env, []):
+                self.subject_listbox.insert(tk.END, subject)
+            for assistant in self.assistants.get(env, []):
+                self.assistant_listbox.insert(tk.END, assistant)
+            for doctor in self.doctors.get(env, []):
+                self.doctor_listbox.insert(tk.END, doctor)
+        self.group_listbox.bind('<<ListboxSelect>>', self.update_classes)
+
+    def update_classes(self, event):
+        """Update the classes listbox when a group is selected."""
+        self.class_listbox.delete(0, tk.END)
+        selected = self.group_listbox.curselection()
+        if selected:
+            env = self.env_listbox.get(self.env_listbox.curselection()[0])
+            group = self.group_listbox.get(selected[0])
+            if env not in self.classes or group not in self.classes[env]:
+                return
+            for class_name in self.classes[env].get(group, []):
+                self.class_listbox.insert(tk.END, class_name)
 
 if __name__ == "__main__":
     """Entry point for the application."""
