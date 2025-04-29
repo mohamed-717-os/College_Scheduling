@@ -6,13 +6,7 @@ import time
 import threading
 
 # Import the logic file (assumed to be scheduler_logic.py)
-try:
-    from scheduellogic import generate_schedules # add the name of the file here 
-except ImportError:
-    def generate_schedules(data):
-        # Placeholder if the logic file is not found
-        time.sleep(5)  # Simulate a 5-second generation process
-        return {"status": "placeholder", "message": "Schedules generated (placeholder)"}
+from scheduelModel import scheduelModel 
 
 class Tooltip:
     """A class to create tooltips for widgets that appear on hover."""
@@ -159,7 +153,7 @@ class SchedulingApp:
         self.days = tk.StringVar(value="5")
         self.periods = tk.StringVar(value="5")
 
-        # Variables for assistant and doctor workload limits (AL and TA)
+        # Variables for assistant and doctor workload limits (AL and TL)
         self.assistant_max_periods = tk.StringVar(value="8")
         self.assistant_max_subjects = tk.StringVar(value="3")
         self.doctor_max_periods = tk.StringVar(value="5")
@@ -202,13 +196,103 @@ class SchedulingApp:
         """Set up the user interface with a two-column layout."""
         # Configure styles for UI elements
         style = ttk.Style()
+        style.theme_use('clam')
+
         style.configure("Custom.TLabelframe.Label", font=("Helvetica", 14, "bold"))
-        style.configure("Custom.TButton", font=("Helvetica", 10))
+
+        style.configure(
+            "Custom.TButton",
+            font=("Helvetica", 10, "normal")
+        )
+        style.map(
+            "Custom.TButton",
+            foreground=[
+                ('pressed', 'white'),
+                ('active',  'white'),
+                ('!disabled', 'black')
+            ],
+            background=[
+                ('pressed', '#2b8ac4'),   # darker when pressed
+                ('active',  '#3399ff'),   # lighter on hover
+                ('!disabled', '#44a6fc')  # normal
+            ]
+        )
+        
         style.configure("Add.TButton", background="#4CAF50", foreground="#4CAF50")
-        style.configure("Delete.TButton", background="#F44336", foreground="#F44336")
-        style.configure("Save.TButton", background="#2196F3", foreground="#2196F3")
-        style.configure("Generate.TButton", background="#FF9800", foreground="#FF9800")
-        style.configure("Invalid.TEntry", fieldbackground="#FFEBEE")
+        style.map("Add.TButton",
+            foreground=[('active', 'white'), ('!disabled', 'white')],
+            background=[('active', '#45A049'), ('!disabled', '#4CAF50')]
+        )
+
+        style.configure(
+            "Delete.TButton",
+            font=("Helvetica", 10, "normal")
+        )
+        style.map(
+            "Delete.TButton",
+            foreground=[
+                ('pressed', 'white'),
+                ('active',  'white'),
+                ('!disabled', 'black')
+            ],
+            background=[
+                ('pressed', '#c62828'),
+                ('active',  '#e57373'),
+                ('!disabled', '#f44336')
+            ]
+        )
+
+        style.configure(
+            "Save.TButton",
+            font=("Helvetica", 10, "normal")
+        )
+        style.map(
+            "Save.TButton",
+            foreground=[
+                ('pressed', 'white'),
+                ('active',  'white'),
+                ('!disabled', 'black')
+            ],
+            background=[
+                ('pressed', '#1565c0'),
+                ('active',  '#64b5f6'),
+                ('!disabled', '#44a6fc')
+            ]
+        )
+
+        style.configure(
+            "Generate.TButton",
+            background="#FF9800",
+            foreground="#FF9800")
+        
+        style.map(
+            "Generate.TButton",
+            foreground=[
+                ('pressed', 'white'),
+                ('active',  'white'),
+                ('!disabled', 'black')
+            ],
+            background=[
+                ('pressed', '#FF9800'),
+                ('active',  '#FF9800'),
+                ('!disabled', '#FF9800')
+            ]
+        )
+
+
+        style.configure(
+            "Invalid.TEntry",
+            fieldbackground="#FFEBEE",
+            font=("Helvetica", 10)
+        )
+        style.map(
+            "Invalid.TEntry",
+            fieldbackground=[
+                ('focus',   '#FFEBEE'),
+                ('!focus',  'white')
+            ]
+        )
+
         style.configure("TLabel", font=("Helvetica", 11))
 
         # Create a scrollable canvas
@@ -374,7 +458,7 @@ class SchedulingApp:
         self.doctor_listbox = tk.Listbox(staff_frame, height=4, width=20)
         self.doctor_listbox.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
 
-        # Add fields for doctor workload limits (TA)
+        # Add fields for doctor workload limits (TL)
         ttk.Label(staff_frame, text="Doctor Max Periods:", style="TLabel").grid(row=2, column=1, sticky=tk.W, padx=5, pady=5)
         doctor_periods_entry = ttk.Entry(staff_frame, textvariable=self.doctor_max_periods, width=10, state="normal")
         doctor_periods_entry.grid(row=3, column=1, sticky=tk.W, padx=5, pady=5)
@@ -474,8 +558,8 @@ class SchedulingApp:
             self.periods.set(str(data.get("periods", 5)))
             self.assistant_max_periods.set(str(data.get("AL", [8, 3])[0]))
             self.assistant_max_subjects.set(str(data.get("AL", [8, 3])[1]))
-            self.doctor_max_periods.set(str(data.get("TA", [5, 3])[0]))
-            self.doctor_max_subjects.set(str(data.get("TA", [5, 3])[1]))
+            self.doctor_max_periods.set(str(data.get("TL", [5, 3])[0]))
+            self.doctor_max_subjects.set(str(data.get("TL", [5, 3])[1]))
 
             # Load environments, groups, and subjects
             self.environments = data.get("environments", [])
@@ -948,7 +1032,7 @@ class SchedulingApp:
             days = int(self.days.get())
             periods = int(self.periods.get())
             AL = [int(self.assistant_max_periods.get()), int(self.assistant_max_subjects.get())]
-            TA = [int(self.doctor_max_periods.get()), int(self.doctor_max_subjects.get())]
+            TL = [int(self.doctor_max_periods.get()), int(self.doctor_max_subjects.get())]
 
             # Flatten the classes dictionary for consistency
             flattened_classes = {}
@@ -992,7 +1076,7 @@ class SchedulingApp:
                 "A": A,
                 "T": T,
                 "AL": AL,
-                "TA": TA,
+                "TL": TL,
                 "AT": AT,
                 "TT": TT,
                 "AS": AS,
@@ -1038,7 +1122,7 @@ class SchedulingApp:
                 # -------------------- START: Generate Schedules Modifications --------------------
                 # Call the generate_schedules function from scheduler_logic.py
                 # The function is expected to handle its own output saving
-                generate_schedules(data)
+                scheduelModel()
                 # -------------------- END: Generate Schedules Modifications --------------------
             except Exception as e:
                 self.generation_error = str(e)
